@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rumuruti Properties Ltd</title>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-analytics.js";
+import { getDatabase, ref, push, set, onValue, query, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-database.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAj6DmsTR9VTXYLE7_CNKbR-P8V8zLH0Wg",
+  authDomain: "rumuruti-properties-ltd.firebaseapp.com",
+  databaseURL: "https://rumuruti-properties-ltd-default-rtdb.firebaseio.com",
+  projectId: "rumuruti-properties-ltd",
+  storageBucket: "rumuruti-properties-ltd.firebasestorage.app",
+  messagingSenderId: "308788488418",
+  appId: "1:308788488418:web:b87c4c04f0f772426fd6bb",
+  measurementId: "G-T67PSCGTCE"
+};
+
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
+const database = getDatabase(app);
+const auth = getAuth(app);
+
+let currentRole = '';
+let currentCategory = 'Cars';
+
+// Screen management
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s => s.style.display='none');
+  document.getElementById(id).style.display='flex';
+}
+window.showScreen = showScreen;
+
+// Registration
+window.registerUser = () => {
+  const email = document.getElementById('regEmail').value;
+  const password = document.getElementById('regPassword').value;
+  if(!email || !password){ alert('Enter email & password'); return; }
+  createUserWithEmailAndPassword(auth, email, password)
+    .then(() => { alert('Registered!'); showScreen('roleScreen'); })
+    .catch(err => alert(err.message));
+};
+
+// Login
+window.loginUser = () => {
+  const email = document.getElementById('loginEmail').value;
+  const password = document.getElementById('loginPassword').value;
+  if(!email || !password){ alert('Enter email & password'); return; }
+  signInWithEmailAndPassword(auth, email, password)
+    .then(() => { showScreen('roleScreen'); })
+    .catch(err => alert(err.message));
+};
+
+// Set role
+window.setRole = (role) => {
+  currentRole = role;
+  const uid = auth.currentUser.uid;
+  const contact = document.getElementById('buyerContact')?.value || '';
+  set(ref(database, 'users/' + uid), { role, contact });
+  showScreen('mainScreen');
+  toggleBuyerSection(role);
+  loadProperties(role, currentCategory);
+};
+
+// Toggle buyer section
+function toggleBuyerSection(role){
+  const buyerSection = document.getElementById('buyerSection');
+  if(role==='Buyer'){ buyerSection.style.display='block'; }
+  else{ buyerSection.style.display='none'; }
+}
+
+// Post property
+window.postProperty = () => {
+  const title = document.getElementById('title').value;
+  const description = document.getElementById('description').value;
+  const category = document.getElementById('categorySelect').value;
+  const uid = auth.currentUser.uid;
+  const userRef = ref(database, 'users/' + uid);
+  let ownerContact = '';
+  onValue(userRef, snap => { if(snap.exists()) ownerContact = snap.val().contact; }, { onlyOnce:true });
+
+  if(!title || !description || !category){ alert("Fill all fields!"); return; }
+  const propertyRef = push(ref(database, 'properties'));
+  set(propertyRef, { title, description, ownerId: uid, ownerContact, category, timestamp: Date.now() });
+  alert("Property posted!");
+  document.getElementById('title').value = '';
+  document.getElementById('description').value = '';
+  loadProperties(currentRole, category);
+};
+
+// Load properties by category
+window.loadProperties = (role, category) => {
+  currentCategory = category;
+  const propertiesList = document.getElementById('propertiesList');
+  propertiesList.style.opacity = 0;
+  setTimeout(()=>{ 
+    document.getElementById('mainScreen').style.backgroundImage = `url('${category.toLowerCase()}.jpg')`; 
+    propertiesList.innerHTML = '';
+    const q = query(ref(database, 'properties'), orderByChild('category'), equalTo(category));
+    onValue(q, snapshot => {
+      propertiesList.innerHTML = '';
+      snapshot.forEach(child => {
+        const prop = child.val();
+        const li = document.createElement('li');
+        li.className = 'propertyItem';
+        li.innerHTML = `<strong>${prop.title}</strong> - ${prop.description}`;
+        li.onclick = () => showPropertyModal(prop, child.key);
+        propertiesList.appendChild(li);
+      });
+      propertiesList.style.opacity = 1;
+    });
+  }, 200);
+  document.querySelectorAll('#tabs button').forEach(btn => btn.classList.remove('activeTab'));
+  document.querySelector(`#tabs button[data-cat='${category}']`).classList.add('activeTab');
+};
+
+// Show property modal
+function showPropertyModal(prop, propId){
+  const modal = document.getElementById('propertyModal');
+  document.getElementById('modalTitle').textContent = prop.title;
+  document.getElementById('modalDescription').textContent = prop.description;
+  document.getElementById('modalContact').textContent = "Contact: " + prop.ownerContact;
+  document.getElementById('modalMessage').value = '';
+  document.getElementById('sendMessageBtn').onclick = () => sendMessage(propId);
+  modal.style.display = 'block';
+}
+window.closeModal = () => { document.getElementById('propertyModal').style.display='none'; };
+
+// Send message
+function sendMessage(propId){
+  const uid = auth.currentUser.uid;
+  const message = document.getElementById('modalMessage').value;
+  if(!message){ alert('Enter a message'); return; }
+  const msgRef = push(ref(database, `messages/${propId}/${uid}`));
+  set(msgRef, { text: message, timestamp: Date.now() });
+  alert('Message sent!');
+  document.getElementById('modalMessage').value = '';
+}
+
+// M-Pesa payment
+window.payMpesa = async () => {
+  const amount = document.getElementById('amount').value;
+  const phone = document.getElementById('phone').value;
+  if(!amount || !phone){ alert("Enter amount & phone"); return; }
+  try{
+    const res = await fetch('https://rumuruti-mpesa.onrender.com/stkpush', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, phone })
+    });
+    const data = await res.json();
+    console.log(data);
+    alert('Payment request sent! Check phone.');
+  } catch(err){ console.error(err); alert('Payment failed'); }
+}
+
+// Auth listener
+onAuthStateChanged(auth, (user) => {
+  if(user){ showScreen('roleScreen'); } 
+  else{ showScreen('welcomeScreen'); }
+});
+</script>
+
+<style>
+body{ margin:0; font-family:sans-serif; }
+.screen{ display:none; padding:20px; flex-direction:column; align-items:center; justify-content:flex-start; min-height:100vh; transition: background 0.5s; }
+input, textarea, button, select{ margin:5px 0; padding:10px; font-size:16px; width:90%; max-width:300px; box-sizing:border-box; }
+button{ cursor:pointer; border:none; border-radius:5px; }
+#buyerSection{ margin-bottom:20px; }
+
+/* Tabs */
+#tabs{ display:flex; flex-wrap:wrap; justify-content:center; margin-bottom:20px; }
+#tabs button{ margin:0 5px; padding:10px 15px; transition:0.3s; }
+.activeTab{ background:#FFD700; color:#000; border-radius:5px; }
+
+/* Properties list scrolling */
+#propertiesList{ list-style:none; padding:0; width:100%; max-width:400px; height:300px; overflow-y:auto; transition: opacity 0.5s; }
+.propertyItem{ padding:10px; margin-bottom:5px; background:rgba(255,255,255,0.8); border-radius:5px; cursor:pointer; }
+
+/* Property modal */
+#propertyModal{ display:none; position:fixed; top:20%; left:50%; transform:translateX(-50%); background:#fff; padding:20px; border:1px solid #000; z-index:1000; width:90%; max-width:350px; border-radius:10px; }
+
+/* Main background */
+#mainScreen{ background-size:cover; background-position:center; transition: background 0.5s; }
+
+/* Welcome screen */
+#welcomeScreen{
+  background-image: url('welcome.jpg');
+  background-size: cover;
+  background-position: center;
+  color:white;
+  text-align:center;
+  position:relative;
+  display:flex;
+  flex-direction:column;
+}
+#welcomeScreen::before{
+  content:"";
+  position:absolute;
+  top:0; left:0;
+  width:100%; height:100%;
+  background: rgba(0,0,0,0.5);
+  z-index:0;
+}
+#welcomeScreen h1, #welcomeScreen button{ position:relative; z-index:1; }
+
+/* M-Pesa green */
+#mpesaSection button{ background: #28a745; color:white; }
+
+/* Responsive */
+@media(max-width:480px){
+  input, textarea, select{ font-size:14px; }
+  button{ font-size:14px; padding:8px; }
+  #tabs button{ padding:8px 12px; margin:3px; }
+  #propertiesList{ height:250px; }
+}
+</style>
+
+<body>
+
+<div id="welcomeScreen" class="screen">
+<h1>Welcome to Rumuruti Properties Ltd</h1>
+<button onclick="showScreen('loginScreen')">Login</button>
+<button onclick="showScreen('registerScreen')">Register</button>
+</div>
+
+<div id="loginScreen" class="screen">
+<h2>Login</h2>
+<input type="email" id="loginEmail" placeholder="Email">
+<input type="password" id="loginPassword" placeholder="Password">
+<button onclick="loginUser()">Login</button>
+<button onclick="showScreen('welcomeScreen')">Back</button>
+</div>
+
+<div id="registerScreen" class="screen">
+<h2>Register</h2>
+<input type="email" id="regEmail" placeholder="Email">
+<input type="password" id="regPassword" placeholder="Password">
+<button onclick="registerUser()">Register</button>
+<button onclick="showScreen('welcomeScreen')">Back</button>
+</div>
+
+<div id="roleScreen" class="screen">
+<h2>Select Role</h2>
+<label>Contact (for buyers):</label>
+<input type="text" id="buyerContact" placeholder="2547XXXXXXXX">
+<button onclick="setRole('Seller')">Seller</button>
+<button onclick="setRole('Buyer')">Buyer</button>
+</div>
+
+<div id="mainScreen" class="screen">
+<h1>Rumuruti Buyers and Sellers Platform</h1>
+
+<div id="tabs">
+<button data-cat="Cars" onclick="loadProperties(currentRole,'Cars')">Cars</button>
+<button data-cat="Motorcycles" onclick="loadProperties(currentRole,'Motorcycles')">Motorcycles</button>
+<button data-cat="Furniture" onclick="loadProperties(currentRole,'Furniture')">Furniture</button>
+<button data-cat="Land" onclick="loadProperties(currentRole,'Land')">Land</button>
+</div>
+
+<div id="buyerSection">
+<h2>Post a Property</h2>
+<select id="categorySelect">
+<option value="">Select Category</option>
+<option value="Cars">Cars</option>
+<option value="Motorcycles">Motorcycles</option>
+<option value="Furniture">Furniture</option>
+<option value="Land">Land</option>
+</select>
+<input type="text" id="title" placeholder="Property Title">
+<textarea id="description" placeholder="Property Description"></textarea>
+<button onclick="postProperty()">Post Property</button>
+</div>
+
+<h2>All Properties</h2>
+<ul id="propertiesList"></ul>
+
+<div id="mpesaSection">
+<h2>Pay via M-Pesa</h2>
+<input type="number" id="amount" placeholder="Enter amount">
+<input type="text" id="phone" placeholder="2547XXXXXXXX">
+<button onclick="payMpesa()">Pay via M-Pesa</button>
+</div>
+</div>
+
+<div id="propertyModal">
+<h3 id="modalTitle"></h3>
+<p id="modalDescription"></p>
+<p id="modalContact"></p>
+<textarea id="modalMessage" placeholder="Type your message"></textarea>
+<button id="sendMessageBtn">Send Message</button>
+<button onclick="closeModal()">Close</button>
+</div>
+
+</body>
+</html>
